@@ -1,4 +1,6 @@
 import traceback
+import os
+import re
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
 from core.msg_builder import build_message, build_message_with_openai
@@ -6,6 +8,7 @@ from core.browser import get_browser
 from playwright.sync_api import Response
 import time
 import json
+from datetime import datetime
 
 
 complates = {}
@@ -15,6 +18,61 @@ userData = get_userData()
 logger = setup_logger(level=config.get("logLevel", "Info"))
 matchMode = config.get("matchMode", "nickname")
 userIDDict = {}
+
+
+def safe_filename(value):
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "unknown"
+
+
+def capture_failure_artifacts(page, username, stage, error):
+    """
+    保存失败时的页面现场，方便在 GitHub Actions artifact 里排查登录页/验证页/页面结构变化。
+    """
+    os.makedirs("logs", exist_ok=True)
+    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    prefix = f"failure_{timestamp}_{safe_filename(username)}_{safe_filename(stage)}"
+    screenshot_path = os.path.join("logs", f"{prefix}.png")
+    html_path = os.path.join("logs", f"{prefix}.html")
+    meta_path = os.path.join("logs", f"{prefix}.txt")
+
+    logger.error(f"账号 {username} 在 {stage} 阶段失败，开始保存页面现场: {prefix}")
+
+    current_url = ""
+    page_title = ""
+    try:
+        current_url = page.url
+    except Exception as capture_error:
+        current_url = f"获取 URL 失败: {capture_error}"
+
+    try:
+        page_title = page.title()
+    except Exception as capture_error:
+        page_title = f"获取标题失败: {capture_error}"
+
+    try:
+        page.screenshot(path=screenshot_path, full_page=True, timeout=10000)
+        logger.error(f"失败截图已保存: {screenshot_path}")
+    except Exception as capture_error:
+        logger.error(f"保存失败截图失败: {capture_error}")
+
+    try:
+        with open(html_path, "w", encoding="utf-8") as html_file:
+            html_file.write(page.content())
+        logger.error(f"失败页面 HTML 已保存: {html_path}")
+    except Exception as capture_error:
+        logger.error(f"保存失败页面 HTML 失败: {capture_error}")
+
+    try:
+        with open(meta_path, "w", encoding="utf-8") as meta_file:
+            meta_file.write(f"username: {username}\n")
+            meta_file.write(f"stage: {stage}\n")
+            meta_file.write(f"url: {current_url}\n")
+            meta_file.write(f"title: {page_title}\n")
+            meta_file.write(f"error_type: {type(error).__name__}\n")
+            meta_file.write(f"error: {error}\n")
+        logger.error(f"失败页面摘要已保存: {meta_path}")
+    except Exception as capture_error:
+        logger.error(f"保存失败页面摘要失败: {capture_error}")
 
 def handle_response(response: Response):
     """
@@ -215,16 +273,19 @@ def scroll_and_select_user(page, username, targets):
 
 
 def do_user_task(browser, username, cookies, targets):
-        context = browser.new_context()  # 每个任务使用独立的上下文
-        context.set_default_navigation_timeout(config["browserTimeout"])  # 设置导航超时时间为 120 秒
-        context.set_default_timeout(config["browserTimeout"])  # 设置所有操作的默认超时时间为 120 秒
+    context = browser.new_context()  # 每个任务使用独立的上下文
+    context.set_default_navigation_timeout(config["browserTimeout"])  # 设置导航超时时间为 120 秒
+    context.set_default_timeout(config["browserTimeout"])  # 设置所有操作的默认超时时间为 120 秒
 
-        page = context.new_page()
-        
+    page = context.new_page()
+    stage = "初始化页面"
+
+    try:
         if matchMode == "short_id":  # 使用抖音号进行匹配
             page.on("response", handle_response)
-        
+
         # 打开抖音创作者中心
+        stage = "打开抖音创作者中心"
         retry_operation(
             "打开抖音创作者中心",
             page.goto,
@@ -233,9 +294,11 @@ def do_user_task(browser, username, cookies, targets):
             url="https://creator.douyin.com/",
         )
         # 注入 Cookie
+        stage = "注入 Cookie"
         context.add_cookies(cookies)
 
         # 导航到消息页面
+        stage = "导航到消息页面"
         retry_operation(
             "导航到消息页面",
             page.goto,
@@ -246,14 +309,17 @@ def do_user_task(browser, username, cookies, targets):
 
         logger.debug(f"账号 {username} 开始发送消息")
         # 滚动并选择用户
-        for username in scroll_and_select_user(page, username, targets):
-            logger.debug(f"账号 {username} 已选中好友 {username} 发送消息")
+        stage = "查找目标好友"
+        for target_username in scroll_and_select_user(page, username, targets):
+            logger.debug(f"账号 {username} 已选中好友 {target_username} 发送消息")
             # 等待聊天输入框元素加载完成，使用更稳定的属性选择器
+            stage = f"等待聊天输入框_{target_username}"
             chat_input_selector = "xpath=//div[contains(@class, 'chat-input-')]"
             page.wait_for_selector(chat_input_selector, timeout=config["browserTimeout"])
             chat_input = page.locator(chat_input_selector)
 
             # 在 chat-input-dccKiL 中输入内容
+            stage = f"发送消息_{target_username}"
             message = build_message()
             for line in message.split("\\n"):
                 chat_input.type(line)  # 输入每一行
@@ -262,13 +328,16 @@ def do_user_task(browser, username, cookies, targets):
                     chat_input.press("Shift+Enter")  # 模拟 Shift+Enter 插入换行
 
             logger.debug(
-                f"账号 {username} 准备发送消息给好友 {username}：\n\t{message}"
+                f"账号 {username} 准备发送消息给好友 {target_username}：\n\t{message}"
             )
-            logger.debug(f"账号 {username} 给好友 {username} 发送消息完成")
+            logger.debug(f"账号 {username} 给好友 {target_username} 发送消息完成")
             # 模拟按下回车键发送消息
             chat_input.press("Enter")
             time.sleep(2)  # 发送完等待一会儿
-
+    except Exception as e:
+        capture_failure_artifacts(page, username, stage, e)
+        raise
+    finally:
         context.close()  # 任务完成后关闭上下文
 
 
@@ -300,4 +369,3 @@ def runTasks():
         playwright.stop()
 
         
-
