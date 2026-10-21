@@ -86,6 +86,9 @@ def do_user_task(browser, username, cookies, targets, unique_id='', fingerprint=
             logger.debug(f"账号 {username} 已选中好友 {friend['display']}，准备发送")
             message = build_message()
             r = im.type_and_send(friend, message)
+            if not r["ok"]:
+                capture_page(page, username, "send_unconfirmed", logger,
+                             f"{friend['display']}: {r.get('reason') or r.get('delivery_state')}")
             if not r["ok"] and r.get("safe_to_retry") is True:
                 logger.warning(
                     f"账号 {username} → {friend['display']} 发送前失败，重试一次"
@@ -139,9 +142,10 @@ def do_user_task(browser, username, cookies, targets, unique_id='', fingerprint=
                 f"账号 {username} 注意：折叠组/陌生人组里有内容 {folds}，"
                 f"主列表扫不到，目标可能被折叠"
             )
+        complete = not (sent_fail or uncertain or scan.get("missing") or scan.get("select_failed"))
         return {
-            "ok": True,
-            "reason": "",
+            "ok": complete,
+            "reason": "" if complete else "存在发送失败、待确认或未找到的好友",
             "sent_ok": sent_ok,
             "sent_fail": sent_fail,
             "sent_uncertain": len(uncertain),
@@ -172,7 +176,7 @@ def runTasks():
     """跑一轮所有账号的任务。
 
     返回进程退出码：任一账号门禁失败或抛异常 → 1，否则 0。
-    「部分好友没找到 / 发送失败」不计入整体失败（可能只是改名），只记日志。
+    未找到好友、发送失败或发送待确认均返回失败，避免误报成功。
     调度器靠这个退出码判断「今天是否算成功执行」。
     """
     logger.info("开始执行任务")

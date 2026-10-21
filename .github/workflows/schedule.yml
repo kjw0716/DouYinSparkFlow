@@ -107,6 +107,12 @@ jobs:
         "$HOME/cloakbrowser/chrome" --version
         echo "CLOAKBROWSER_BINARY_PATH=$HOME/cloakbrowser/chrome" >> "$GITHUB_ENV"
 
+    - name: Verify browser input on an offline test page
+      env:
+        APP_SCHEDULE_AUTOREGISTER: "0"
+        SCHEDULER_BACKEND: noop
+      run: python -m unittest tests.test_input_browser
+
     - name: Export Github Environment Variables and Secrets to JSON
       env:
         VARS_JSON: ${{ toJson(vars) }}

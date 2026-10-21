@@ -1729,7 +1729,7 @@ class DouyinIM:
       if (window.__imevHooked) return;
       window.__imevHooked = true;
       window.__imev = [];
-      for (const t of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click']) {
+      for (const t of ['pointermove', 'mousemove', 'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click']) {
         document.addEventListener(t, e => {
           try {
             const tgt = e.target;
@@ -1808,12 +1808,7 @@ class DouyinIM:
         return {"x": x, "y": y, "box": dict(box), "mode": mode}
 
     def _input_mode(self):
-        """探测真实输入事件能否送达页面。
-
-        抖音在某些环境（本次是 Linux 容器 / 无头）下会在 document 捕获阶段拦截
-        所有 trusted 输入事件：CDP 的 mouse/keyboard 无任何回显，页面 0 事件。
-        探测一次即可决定后续走 real 还是 synth（JS 合成事件）。
-        """
+        """Probe pointer delivery; absence of events is not proof of site blocking."""
         mode = getattr(self, "_input_mode_cache", None)
         if mode:
             return mode
@@ -1821,6 +1816,7 @@ class DouyinIM:
             self.page.evaluate(self.JS_INPUT_HOOK)
             self.page.evaluate("() => { window.__imev = []; }")
             self.page.mouse.move(2, 2)
+            self.page.mouse.move(8, 8)
             self.page.wait_for_timeout(300)
             ev = self.page.evaluate("() => (window.__imev || []).splice(0)") or []
             mode = "real" if ev else "synth"
@@ -1828,7 +1824,7 @@ class DouyinIM:
             mode = "synth"
         self._input_mode_cache = mode
         logger.warning(f"[IM] 输入模式探测结果 = {mode}"
-                       + ("（真实输入被页面吞掉，改用 JS 合成事件）" if mode == "synth" else ""))
+                       + ("（未观察到指针事件，尝试合成输入）" if mode == "synth" else ""))
         return mode
 
     def _js_click_send(self):
@@ -2026,6 +2022,9 @@ class DouyinIM:
     def _editor(self):
         for sel in ('[data-e2e="msg-input"] .public-DraftEditor-content',
                     '.DraftEditor-root [contenteditable="true"]',
+                    '[data-e2e="msg-input"] [contenteditable="true"]',
+                    '.messageEditorimChatEditorContainer [contenteditable="true"]',
+                    '[contenteditable="true"][data-placeholder="发送消息"]',
                     '.messageEditorimChatEditorContainer'):
             try:
                 loc = self.page.locator(sel).first
