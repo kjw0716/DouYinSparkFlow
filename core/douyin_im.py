@@ -713,12 +713,17 @@ def scrape_ssr(html):
             raw["not_exist_login_cookie"] = _take(
                 v, r'"not_exist_login_cookie"\s*:\s*(true|false)')
 
-    out["user_id"] = raw.get("odin_user_id") or raw.get("uid")
+    # Odin also assigns an ID to logged-out visitors; it cannot override an
+    # explicit login verdict. Prefer the account UID when both IDs are present.
+    out["user_id"] = raw.get("uid") or raw.get("odin_user_id")
     out["sec_uid"] = raw.get("sec_uid")
-    if out["user_id"] and out["user_id"] != "0":
-        out["verdict"] = "logged_in"
-    elif raw.get("is_login") == "false" or raw.get("not_exist_login_cookie") == "true":
+    if raw.get("is_login") == "false" or raw.get("not_exist_login_cookie") == "true":
         out["verdict"] = "logged_out"
+        out["user_id"] = None
+    elif out["user_id"] and out["user_id"] != "0" and raw.get("is_login") == "true":
+        out["verdict"] = "logged_in"
+    elif raw.get("uid"):
+        out["verdict"] = "logged_in"
     elif not out["user_id"] and raw.get("is_login") is None:
         out["verdict"] = "logged_out"
     return out
