@@ -121,6 +121,7 @@ class TaskDeliveryTests(unittest.TestCase):
         self.assertEqual(result["sent_fail"], 0)
         self.assertEqual(result["sent_uncertain"], 1)
         self.assertEqual(result["uncertain"], ["好友0"])
+        self.assertFalse(result["ok"])
 
     def test_pre_send_failure_can_retry_once(self):
         result, im = self.run_task([
@@ -132,6 +133,8 @@ class TaskDeliveryTests(unittest.TestCase):
         self.assertEqual(result["sent_ok"], 1)
         self.assertEqual(result["sent_fail"], 0)
 
+        self.assertTrue(result["ok"])
+
     def test_retry_becoming_uncertain_is_not_retried_again(self):
         result, im = self.run_task([
             {"ok": False, "delivery_state": "not_sent", "safe_to_retry": True},
@@ -139,6 +142,7 @@ class TaskDeliveryTests(unittest.TestCase):
         ])
         self.assertEqual(im.type_and_send.call_count, 2)
         self.assertEqual(result["sent_uncertain"], 1)
+        self.assertFalse(result["ok"])
 
     def test_pre_send_retries_are_bounded(self):
         result, im = self.run_task([
@@ -147,6 +151,7 @@ class TaskDeliveryTests(unittest.TestCase):
         ])
         self.assertEqual(im.type_and_send.call_count, 2)
         self.assertEqual(result["sent_fail"], 1)
+        self.assertFalse(result["ok"])
 
     def test_failure_without_explicit_retry_permission_is_not_resent(self):
         result, im = self.run_task([{"ok": False}])
