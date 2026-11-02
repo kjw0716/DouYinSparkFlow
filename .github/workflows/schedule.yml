@@ -5,8 +5,6 @@ name: DouYin Spark Flow Schedule Run
 # 经 toJson 注入进程环境 —— COOKIES_<抖音号> 键名跟着账号走，没法逐条写 env 映射。
 on:
   workflow_dispatch: # 允许手动触发
-  schedule: # 定时任务
-    - cron: "0 1 * * *" # 每天 1:00 UTC（对应北京时间 9:00）
 
 permissions:
   contents: read
@@ -119,8 +117,18 @@ jobs:
         SECRETS_JSON: ${{ toJson(secrets) }}
       run: python utils/export_github_env.py
 
-    - name: Run DouYin Spark Flow
-      run: python main.py task
+    - name: Verify refreshed login without sending messages
+      run: |
+        python scripts/check_cookies.py
+        python - <<'PY'
+        import json
+        from pathlib import Path
+        accounts = json.loads(Path("cookie-health.json").read_text())["accounts"]
+        assert accounts, "No account configured"
+        for account in accounts.values():
+            print("Cloud login:", account["status"], account["reason"])
+        assert all(a["status"] == "valid" for a in accounts.values()), "Cloud login check failed"
+        PY
 
     - uses: actions/upload-artifact@v4
       if: ${{ !cancelled() }}
